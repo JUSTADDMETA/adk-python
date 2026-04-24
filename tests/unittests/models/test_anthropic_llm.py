@@ -1350,3 +1350,54 @@ async def test_non_streaming_does_not_pass_stream_param():
   mock_client.messages.create.assert_called_once()
   _, kwargs = mock_client.messages.create.call_args
   assert "stream" not in kwargs
+
+
+def test_part_to_message_block_function_call_preserves_valid_id():
+  """Valid Anthropic ids must round-trip byte-for-byte."""
+  part = types.Part.from_function_call(name="test_tool", args={"k": "v"})
+  part.function_call.id = "toolu_01abc"
+
+  result = part_to_message_block(part)
+
+  assert result["id"] == "toolu_01abc"
+
+
+def test_part_to_message_block_function_response_preserves_valid_id():
+  """function_response ids must round-trip byte-for-byte to tool_use_id."""
+  part = types.Part.from_function_response(
+      name="test_tool", response={"result": "ok"}
+  )
+  part.function_response.id = "toolu_01abc"
+
+  result = part_to_message_block(part)
+
+  assert result["tool_use_id"] == "toolu_01abc"
+
+
+def test_part_to_message_block_preserves_adk_fallback_id():
+  """ADK-generated ``adk-<uuid>`` ids match Anthropic's regex and round-trip.
+
+  This is the path exercised by the contents.py fix: when Vertex Claude
+  returns id=None, ``populate_client_function_call_id`` writes ``adk-<uuid>``,
+  and contents.py preserves it through replay. ``part_to_message_block`` must
+  pass it through to Anthropic unchanged so call/response stay paired.
+  """
+  call_part = types.Part.from_function_call(name="t", args={"a": 1})
+  call_part.function_call.id = "adk-12345678-1234-1234-1234-123456789012"
+  response_part = types.Part.from_function_response(
+      name="t", response={"result": "ok"}
+  )
+  response_part.function_response.id = (
+      "adk-12345678-1234-1234-1234-123456789012"
+  )
+
+  call_result = part_to_message_block(call_part)
+  response_result = part_to_message_block(response_part)
+
+  assert call_result["id"] == "adk-12345678-1234-1234-1234-123456789012"
+  assert (
+      response_result["tool_use_id"]
+      == "adk-12345678-1234-1234-1234-123456789012"
+  )
+  # The pair must remain matched after conversion.
+  assert call_result["id"] == response_result["tool_use_id"]
